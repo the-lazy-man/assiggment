@@ -1,8 +1,12 @@
 package com.example.assiggment.di
 
+import com.example.assiggment.data.local.TokenManager
 import com.example.assiggment.data.remote.PeanutApi
+import com.example.assiggment.data.remote.SoapManager
 import com.example.assiggment.data.repository.AuthRepositoryImpl
+import com.example.assiggment.data.repository.MainRepositoryImpl
 import com.example.assiggment.domain.repository.AuthRepository
+import com.example.assiggment.domain.repository.MainRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -31,10 +35,14 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideRetrofit(client: OkHttpClient): Retrofit {
+        val gson = com.google.gson.GsonBuilder()
+            .setLenient()
+            .create()
+
         return Retrofit.Builder()
             .baseUrl("https://peanut.ifxdb.com/")
             .client(client)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
     }
 
@@ -46,7 +54,19 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideAuthRepository(api: PeanutApi): AuthRepository {
-        return AuthRepositoryImpl(api)
+    fun provideAuthRepository(api: PeanutApi, tokenManager: TokenManager): AuthRepository {
+        return AuthRepositoryImpl(api, tokenManager)
+    }
+
+    @Provides
+    @Singleton
+    fun provideSoapManager(client: OkHttpClient): SoapManager {
+        return SoapManager(client)
+    }
+
+    @Provides
+    @Singleton
+    fun provideMainRepository(api: PeanutApi, soapManager: SoapManager): MainRepository {
+        return MainRepositoryImpl(api, soapManager)
     }
 }
