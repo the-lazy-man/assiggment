@@ -2,7 +2,7 @@
 
 A production-ready Android application for trading management, built with modern Android development practices (Clean Architecture, Jetpack Compose, Hilt).
 
-#Preview link
+# Preview link
  
 https://drive.google.com/file/d/1-qnhBhqmJjng8ZKWin7ILRy03-nxaxOx/view?usp=drivesdk
 
