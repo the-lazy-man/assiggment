@@ -12,6 +12,8 @@ import com.example.assiggment.domain.usecase.GetPromotionsUseCase
 import com.example.assiggment.domain.usecase.GetTradesUseCase
 import com.example.assiggment.domain.usecase.LogoutUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -40,29 +42,53 @@ class MainViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
-            state = state.copy(isLoading = true, error = null)
-            
-            // Parallel execution would be better but keeping it simple for now
-            val profileResult = getProfileUseCase(loginId, token)
-            val tradesResult = getTradesUseCase(loginId, token)
-            val promotionsResult = getPromotionsUseCase()
+        // Set loading and CLEAR data to satisfy "Hide all data" on reload
+        state = state.copy(
+            isLoading = true, 
+            profile = null, 
+            trades = emptyList(), 
+            promotions = emptyList(), 
+            error = null
+        )
 
-            if (profileResult.isSuccess && tradesResult.isSuccess && promotionsResult.isSuccess) {
+        val jobProfile = viewModelScope.launch {
+            val result = getProfileUseCase(loginId, token)
+            if (result.isSuccess) {
+                state = state.copy(profile = result.getOrNull())
+            } else {
+                // Keep track of error but maybe don't overwrite if another succeeded
+                 state = state.copy(error = result.exceptionOrNull()?.message)
+            }
+        }
+
+        val jobTrades = viewModelScope.launch {
+            val result = getTradesUseCase(loginId, token)
+            if (result.isSuccess) {
+                val trades = result.getOrNull() ?: emptyList()
                 state = state.copy(
-                    isLoading = false,
-                    profile = profileResult.getOrNull(),
-                    trades = tradesResult.getOrNull() ?: emptyList(),
-                    promotions = promotionsResult.getOrNull() ?: emptyList(),
-                    totalProfit = tradesResult.getOrNull()?.sumOf { it.profit } ?: 0.0,
-                    error = null
+                    trades = trades,
+                    totalProfit = trades.sumOf { it.profit }
                 )
             } else {
-                state = state.copy(
-                    isLoading = false,
-                    error = profileResult.exceptionOrNull()?.message ?: tradesResult.exceptionOrNull()?.message // Show one error
-                )
+                state = state.copy(error = result.exceptionOrNull()?.message)
             }
+        }
+
+        // Promotions - Strictly independent, does not affect isLoading (Spinner)
+        viewModelScope.launch {
+            val result = getPromotionsUseCase()
+            if (result.isSuccess) {
+                state = state.copy(promotions = result.getOrNull() ?: emptyList())
+            }
+        }
+
+        // Monitor Critical Jobs (Profile & Trades) to toggle "isLoading"
+        viewModelScope.launch {
+            // join() waits for the job to complete
+            jobProfile.join()
+            jobTrades.join()
+            // Once both critical parts are returned (success or fail), stop the spinner
+            state = state.copy(isLoading = false)
         }
     }
 

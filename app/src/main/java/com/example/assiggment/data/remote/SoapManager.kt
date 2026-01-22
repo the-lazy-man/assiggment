@@ -18,80 +18,99 @@ class SoapManager @Inject constructor(
 ) {
     suspend fun getPromotions(): List<Promotion> = withContext(Dispatchers.IO) {
         val soapXml = """
-            <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tem="http://tempuri.org/">
-               <soapenv:Header/>
-               <soapenv:Body>
-                  <tem:GetCCPromo>
-                     <tem:lang>en</tem:lang>
-                  </tem:GetCCPromo>
-               </soapenv:Body>
-            </soapenv:Envelope>
-        """.trimIndent()
+        <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" 
+                          xmlns:tem="http://tempuri.org/">
+           <soapenv:Header/>
+           <soapenv:Body>
+              <tem:GetCCPromo>
+                 <tem:lang>en</tem:lang>
+              </tem:GetCCPromo>
+           </soapenv:Body>
+        </soapenv:Envelope>
+    """.trimIndent()
+
+        Log.d("SoapManager", "SOAP Request XML:\n$soapXml")
 
         val request = Request.Builder()
             .url("https://api-forexcopy.contentdatapro.com/Services/CabinetMicroService.svc")
             .post(soapXml.toRequestBody("text/xml; charset=utf-8".toMediaType()))
             .addHeader("SOAPAction", "http://tempuri.org/ICabinetMicroService/GetCCPromo")
+            .addHeader("Content-Type", "text/xml; charset=utf-8")
             .build()
 
         try {
+            Log.d("SoapManager", "Making SOAP request...")
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
+
+            Log.d("SoapManager", "Response code: ${response.code}")
+            Log.d("SoapManager", "Response body (first 500 chars): ${responseBody.take(500)}...")
+
             if (response.isSuccessful && responseBody.isNotEmpty()) {
-                parsePromotions(responseBody)
+                val parsed = parsePromotions(responseBody)
+                Log.d("SoapManager", "Parsed ${parsed.size} promotions")
+                parsed
             } else {
-                Log.e("SoapManager", "Error fetching promotions: ${response.code}")
+                Log.e("SoapManager", "Error: ${response.code} - ${response.message}")
                 emptyList()
             }
         } catch (e: Exception) {
-            Log.e("SoapManager", "Exception fetching promotions", e)
+            Log.e("SoapManager", "Exception", e)
             emptyList()
         }
     }
-
     private fun parsePromotions(xml: String): List<Promotion> {
         val promotions = mutableListOf<Promotion>()
         try {
             val factory = XmlPullParserFactory.newInstance()
-            factory.isNamespaceAware = true
+            factory.isNamespaceAware = true  // ✓ You have this
             val xpp = factory.newPullParser()
             xpp.setInput(StringReader(xml))
 
             var eventType = xpp.eventType
-            var currentTag = ""
-            var title = ""
-            var imageUrl = ""
-            var link = ""
-            var id = ""
+            var currentPromo: MutableMap<String, String>? = null
+            var currentTag: String? = null
 
-            // Very basic XML parsing logic - can be improved with XmlPullParser util
-            // We look for specific tags inside the structure
-            // Expecting structure like: <GetCCPromoResult> ... <CCPromo> ... </CCPromo> </GetCCPromoResult>
-            
             while (eventType != XmlPullParser.END_DOCUMENT) {
-                if (eventType == XmlPullParser.START_TAG) {
-                    currentTag = xpp.name
-                    if (currentTag == "CCPromo") {
-                        title = ""
-                        imageUrl = ""
-                        link = ""
-                        id = ""
-                    }
-                } else if (eventType == XmlPullParser.TEXT) {
-                    val text = xpp.text
-                    when (currentTag) {
-                        "ID" -> id = text
-                        "Title" -> title = text
-                        "UrlImage" -> imageUrl = text // Swap domain if needed
-                        "UrlLink" -> link = text
-                    }
-                } else if (eventType == XmlPullParser.END_TAG) {
-                    if (xpp.name == "CCPromo") {
-                        if (title.isNotEmpty()) {
-                             // Replace domain as requested
-                            val finalImage = imageUrl.replace("forex-images.instaforex.com", "forex-images.ifxdb.com")
-                            promotions.add(Promotion(id, title, finalImage, link))
+                when (eventType) {
+                    XmlPullParser.START_TAG -> {
+                        currentTag = xpp.name
+                        if (currentTag == "CCPromo") {
+                            currentPromo = mutableMapOf()
                         }
+                    }
+                    XmlPullParser.TEXT -> {
+                        val text = xpp.text.trim()
+                        if (text.isNotEmpty() && currentTag != null) {
+                            when (currentTag) {
+                                "ID" -> currentPromo?.put("id", text)
+                                "Title" -> currentPromo?.put("title", text)
+                                "UrlImage" -> currentPromo?.put("imageUrl", text)
+                                "UrlLink" -> currentPromo?.put("link", text)
+                            }
+                        }
+                    }
+                    XmlPullParser.END_TAG -> {
+                        if (xpp.name == "CCPromo") {
+                            currentPromo?.let { promoMap ->
+                                val title = promoMap["title"] ?: ""
+                                if (title.isNotEmpty()) {
+                                    val imageUrl = promoMap["imageUrl"]?.replace(
+                                        "forex-images.instaforex.com",
+                                        "forex-images.ifxdb.com"
+                                    ) ?: ""
+
+                                    promotions.add(Promotion(
+                                        id = promoMap["id"] ?: "",
+                                        title = title,
+                                        imageUrl = imageUrl,
+                                        link = promoMap["link"] ?: ""
+                                    ))
+                                }
+                            }
+                            currentPromo = null
+                        }
+                        currentTag = null
                     }
                 }
                 eventType = xpp.next()

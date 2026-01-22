@@ -4,6 +4,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import coil.compose.AsyncImage
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
@@ -14,9 +17,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.assiggment.domain.model.Profile
+import com.example.assiggment.domain.model.Promotion
 import com.example.assiggment.domain.model.Trade
 import java.text.SimpleDateFormat
 
@@ -72,72 +77,117 @@ fun MainScreen(
             }
         }
     ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
-            if (state.isLoading) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            } else {
-                Column {
-                    // Profile Header
-                    state.profile?.let { profile ->
-                        ProfileHeader(profile)
-                        Divider()
-                    }
+        val pullRefreshState = rememberPullToRefreshState()
+        
+        PullToRefreshBox(
+            isRefreshing = state.isLoading,
+            state = pullRefreshState,
+            onRefresh = { viewModel.loadData() },
+            modifier = Modifier.padding(paddingValues).fillMaxSize()
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                val configuration = LocalConfiguration.current
+                val isPortrait = configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
 
-                    // Promotions Carousel
-                    if (state.promotions.isNotEmpty()) {
-                        Text(
-                            text = "Promotions",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(16.dp, 8.dp)
-                        )
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(state.promotions) { promo ->
-                                PromotionCard(promo)
+                if (isPortrait) {
+                    // Portrait Layout (Single Column)
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        item {
+                            state.profile?.let { profile ->
+                                ProfileHeader(profile)
+                                Divider()
                             }
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-
-                    // Trades List
-                    Text(
-                        text = "Open Trades",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(16.dp, 8.dp)
-                    )
-                    if (state.trades.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                            Text("No open trades found.")
+                        if (state.promotions.isNotEmpty()) {
+                            item {
+                                PromotionsSection(state.promotions)
+                            }
                         }
-                    } else {
+                        if (state.trades.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text = "Open Trades",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(16.dp, 8.dp)
+                                )
+                            }
+                            items(state.trades) { trade ->
+                                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                                    TradeCard(trade)
+                                }
+                            }
+                        } else if (!state.isLoading && state.profile != null) {
+                            item { EmptyTradesView() }
+                        }
+                    }
+                } else {
+                    // Landscape Layout (Two Columns)
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        // Left Column: Profile & Promotions
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                        ) {
+                            state.profile?.let { profile ->
+                                ProfileHeader(profile)
+                                Divider()
+                            }
+                            if (state.promotions.isNotEmpty()) {
+                                PromotionsSection(state.promotions)
+                            }
+                        }
+                        
+                        // Right Column: Trades List
                         LazyColumn(
+                            modifier = Modifier.weight(1f),
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(state.trades) { trade ->
-                                TradeCard(trade)
+                             item {
+                                Text(
+                                    text = "Open Trades",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                            }
+                             if (state.trades.isNotEmpty()) {
+                                items(state.trades) { trade ->
+                                    TradeCard(trade)
+                                }
+                            } else if (!state.isLoading && state.profile != null) {
+                                item { EmptyTradesView() }
                             }
                         }
                     }
                 }
-            }
 
-            // Simple error display
-            state.error?.let { error ->
-                Column(
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Error: $error",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    Button(onClick = { viewModel.loadData() }) {
-                        Text("Retry")
+                // Loader Layer (Overlays content ONLY when fully empty)
+                if (state.isLoading && state.profile == null && state.trades.isEmpty()) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                } else if (state.isLoading) {
+                    // Optional: Small linear loader at top if refreshing but content exists?
+                     LinearProgressIndicator(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth())
+                }
+
+                // Simple error display (overlay)
+                state.error?.let { error ->
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Error: $error",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Button(onClick = { viewModel.loadData() }) {
+                            Text("Retry")
+                        }
                     }
                 }
             }
@@ -185,6 +235,26 @@ fun ProfileHeader(profile: Profile) {
                 )
             }
         }
+    }
+}
+
+@Composable
+fun PromotionsSection(promotions: List<Promotion>) {
+    Column {
+        Text(
+            text = "Promotions",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(16.dp, 8.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            items(promotions) { promo ->
+                PromotionCard(promo)
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -253,7 +323,7 @@ fun TradeCard(trade: Trade) {
 }
 
 @Composable
-fun PromotionCard(promo: com.example.assiggment.domain.model.Promotion) {
+fun PromotionCard(promo: Promotion) {
     Card(
         modifier = Modifier.width(280.dp).height(160.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
@@ -280,5 +350,15 @@ fun PromotionCard(promo: com.example.assiggment.domain.model.Promotion) {
                 }
             }
         }
+    }
+}
+
+@Composable
+fun EmptyTradesView() {
+    Box(
+        modifier = Modifier.fillMaxWidth().height(200.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("No open trades found.")
     }
 }
